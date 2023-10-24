@@ -1,0 +1,64 @@
+apiVersion: automation.cloudbees.io/v1alpha1
+kind: workflow
+name: My automation Component5
+on:
+  push:
+    branches:
+      - "**"
+jobs:
+  build:
+    environment: stage
+    steps:
+      - name: Checkout
+        uses: cloudbees-io/checkout@v1.0.2
+
+      - name: Running Snyk SCA scan
+        uses: cloudbees-io/snyk-sca-scan-dependency@v1
+        with:
+          orgname: ${{ vars.SNYK_SAAS_ORG_NAME }}
+          token: ${{ secrets.SNYK_SAAS_TOKEN }}
+          language: "LANGUAGE_JAVA"
+          
+      - name: Running Snyk SAST Scan
+        uses: cloudbees-io/snyk-sast-scan-code@v1
+        with:
+          orgname: ${{ vars.SNYK_SAAS_ORG_NAME }}
+          token: ${{ secrets.SNYK_SAAS_TOKEN }}
+          language: "LANGUAGE_JAVA"
+          
+      - name: Maven Build
+        uses: docker://maven:3.8.7-openjdk-18-slim
+        run: |
+          mvn clean install
+          ls -lrt target/
+          
+      - name: ConfigureAWSCredentials
+        uses: cloudbees-io/configure-aws-credentials@v0.0.4
+        with:
+          aws-access-key-id: ${{ secrets.RIQ_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.RIQ_SECRET_KEY }}
+          aws-region: us-west-2
+      - name: DockerBuild
+        uses: cloudbees-io/kaniko@v1
+        kind: build
+        with:
+          destination: 641518622681.dkr.ecr.us-west-2.amazonaws.com/demo_component3:${{ cloudbees.scm.sha }}
+          
+      # - name: Running container scan using Trivy
+      #   uses: cloudbees-io/trivy-scan-container@v1
+      #   with:
+      #     image-location: 641518622681.dkr.ecr.us-west-2.amazonaws.com/demo_component3
+      #     image-tag: ${{ cloudbees.scm.sha }}
+
+      - name: Deploy using Octopus
+        shell: sh
+        uses: cloudbees-io/octopus-run-project
+        kind: deploy
+        with:
+          release: 0.0.2
+          space-name: Default
+          token: ${{ secrets.OCTOPUS_TOKEN }}
+          url: ${{ vars.OCTOPUS_URL }}
+          environment-name: Stage
+
+
