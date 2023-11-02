@@ -1,50 +1,83 @@
 apiVersion: automation.cloudbees.io/v1alpha1
 kind: workflow
-name: My automation Component5
+name: My automation
 on:
   push:
     branches:
       - "**"
+
 jobs:
   build:
     environment: stage
     steps:
       - name: Checkout
         uses: cloudbees-io/checkout@v1.0.2
-     
-      - name: Maven Build
-        uses: docker://maven:3.8.7-openjdk-18-slim
+
+      - id: run-unit-test
+        name: Unit test and coverage
+        uses: docker://golang:1.20
+        kind: test
         run: |
-          mvn clean install
-          ls -lrt target/
-          
-      - name: ConfigureAWSCredentials
-        uses: cloudbees-io/configure-aws-credentials@v0.0.4
+          set -eo pipefail
+          echo "__________________ SETUP ENVIRONMENT __________________"
+          COVER="coverprofile.out"
+          export PATH="${PATH}:${GOPATH}/bin"
+          export GOCOVERDIR="."
+
+          echo "__________________ INSTALL TOOLS __________________"
+          go install github.com/onsi/ginkgo/v2/ginkgo@latest
+          go install github.com/jstemmer/go-junit-report@latest
+          go install -v github.com/axw/gocov/gocov@latest
+          go install -v github.com/AlekSi/gocov-xml@latest
+
+          echo "__________________ VERSION INFO __________________"
+          echo "Go version: $(go version)"
+          echo "Ginkgo version: $(ginkgo version)"
+
+          echo "__________________ TEST __________________"
+          go mod tidy
+          ginkgo -timeout=15m -coverprofile "${COVER}" -r -v -skip-package=pb,test,vendor,mock | tee ./test.log
+          cat  ./test.log | go-junit-report >./test.xml
+          gocov convert "${COVER}" | gocov-xml > ./coverage.xml
+
+          echo "__________________ OUTPUTS __________________"
+          echo "NOTICE: test.log (go test), coverprofile.out (gocov), test.xml (JUnit), coverage.xml (Cobertura) are availabe in the workspace."
+
+      - name: Run sonarqube bundled action from platform
+        uses: cloudbees-io/sonarqube-bundled-sast-scan-code@v1
+        
+      - name: Running Snyk SCA scan
+        uses: cloudbees-io/snyk-sca-scan-dependency@v1
         with:
-          aws-access-key-id: ${{ secrets.RIQ_ACCESS_KEY }}
-          aws-secret-access-key: ${{ secrets.RIQ_SECRET_KEY }}
-          aws-region: us-west-2
-      - name: DockerBuild
-        uses: cloudbees-io/kaniko@v1
+          orgname: ${{ vars.SNYK_SAAS_ORG_NAME }}
+          token: ${{ secrets.SNYK_SAAS_TOKEN }}
+          language: "LANGUAGE_JAVA"
+          
+      - name: Running Snyk SAST Scan
+        uses: cloudbees-io/snyk-sast-scan-code@v1
+        with:
+          orgname: ${{ vars.SNYK_SAAS_ORG_NAME }}
+          token: ${{ secrets.SNYK_SAAS_TOKEN }}
+          language: "LANGUAGE_JAVA"
+          
+      - name: Deploy Using CBCI
+        uses: cloudbees-io/cbci-run-job
         kind: build
         with:
-          destination: 641518622681.dkr.ecr.us-west-2.amazonaws.com/demo_component3:${{ cloudbees.scm.sha }}
-          
-      # - name: Running container scan using Trivy
-      #   uses: cloudbees-io/trivy-scan-container@v1
-      #   with:
-      #     image-location: 641518622681.dkr.ecr.us-west-2.amazonaws.com/demo_component3
-      #     image-tag: ${{ cloudbees.scm.sha }}
+          url: https://releaseiq.ironman.releaseiq.io/
+          username: ${{ secrets.CBCI_IRONMAN_USERNAME }}
+          token: ${{ secrets.CBCI_IRONMAN_PASSWORD }}
+          job-name: demo_build_component4
+          parameters: '{"TAG_NAME":"${{ cloudbees.scm.sha }}"}'
 
-      - name: Deploy using Octopus
-        shell: sh
-        uses: cloudbees-io/octopus-run-project
+      - name: Deploy Using CBCI
+        uses: cloudbees-io/cbci-run-job
         kind: deploy
         with:
-          release: 0.0.2
-          space-name: Default
-          token: ${{ secrets.OCTOPUS_TOKEN }}
-          url: ${{ vars.OCTOPUS_URL }}
-          environment-name: Stage
+          url: https://releaseiq.ironman.releaseiq.io/
+          username: ${{ secrets.CBCI_IRONMAN_USERNAME }}
+          token: ${{ secrets.CBCI_IRONMAN_PASSWORD }}
+          job-name: demo_deploy_component4
+          parameters: '{"TAG_NAME":"${{ cloudbees.scm.sha }}"}'
 
-
+          
